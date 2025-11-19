@@ -3,6 +3,8 @@
 #include "kalloc.h"
 #include "rtc.h"
 #include "kalloc.h"
+#include "paging.h"
+#include "task.h"
 
 #define HISTORY_MAX 10
 #define CMD_MAX_LEN 128
@@ -24,7 +26,10 @@ static inline void qemu_poweroff(){
 }
 static inline void cpuid(uint32_t leaf,uint32_t* a,uint32_t* b,uint32_t* c,uint32_t* d){
     uint32_t A,B,C,D; __asm__ volatile("cpuid":"=a"(A),"=b"(B),"=c"(C),"=d"(D):"a"(leaf),"c"(0));
-    if(a)*a=A; if(b)*b=B; if(c)*c=C; if(d)*d=D;
+    if(a)*a=A; 
+    if(b)*b=B; 
+    if(c)*c=C; 
+    if(d)*d=D;
 }
 
 static size_t my_strlen(const char*s){size_t n=0;while(s[n])n++;return n;}
@@ -183,9 +188,24 @@ static void cmd_cpuid(){
     vga_write("edx: ");hex8(edx,t);vga_writeln(t);
 }
 
+static void test_task(){
+    while(1){
+        int id = task_current_id();
+        char buf[16];
+        utoa32((uint32_t)id, buf);
+        vga_write("[task ");
+        vga_write(buf);
+        vga_writeln("] Hello from test_task");
+
+        for(volatile uint32_t i=0; i<1000000; i++);
+        task_yield();
+    }
+}
+
+
 static void run_cmd(const char* buf, uint32_t mbi_addr){
     if(my_streq(buf,"help"))
-        vga_writeln("commands: help, echo <text>, clear, halt, uptime, cpuid, reboot, mem, memmap, alloc <n>, heap, kmstat, time, history, !!, poweroff");
+        vga_writeln("commands: help, echo <text>, clear, halt, uptime, cpuid, reboot, mem, memmap, alloc <n>, heap, kmstat, taskrun, tasks, switch, time, history, !!, poweroff");
 
     else if(my_starts(buf,"echo "))
         vga_writeln(buf+5);
@@ -247,7 +267,16 @@ static void run_cmd(const char* buf, uint32_t mbi_addr){
         hex8(kalloc_get_ptr(),  h); vga_write("heap_ptr  =0x"); vga_writeln(h);
         utoa32(used, d);           vga_write("used bytes="); vga_writeln(d);
     }
+    
+    else if(my_streq(buf,"taskrun"))
+        task_create(test_task);
 
+    else if(my_streq(buf,"tasks"))
+        task_list();
+        
+    else if(my_streq(buf,"switch"))
+        task_switch_first();
+        
     else if(my_streq(buf,"time")){
         struct rtc_time t;
         rtc_read(&t);
@@ -293,13 +322,17 @@ void kernel_main(uint32_t mbi_addr){
     /* colored banner (prints after clear so it remains visible) */
     vga_set_color(0x1F); /* blue background, white text */
     vga_writeln("==============================================");
-    vga_writeln("                  mini-os                     ");
+    vga_writeln("               ITI Patna OS                   ");
     vga_writeln("==============================================");
     vga_set_color(0x0F); /* reset to default */
 
     irq_init(); __asm__ volatile("sti");
     /* initialize kernel heap (bump allocator) at 16 MiB */
     kalloc_init(0x01000000);
+    
+    paging_init();
+    task_init();
+    
     char buf[128]; size_t n=0; prompt();
     for(;;){
         char c=kbd_getch();
