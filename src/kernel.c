@@ -188,24 +188,41 @@ static void cmd_cpuid(){
     vga_write("edx: ");hex8(edx,t);vga_writeln(t);
 }
 
-static void test_task(){
-    while(1){
-        int id = task_current_id();
-        char buf[16];
-        utoa32((uint32_t)id, buf);
-        vga_write("[task ");
-        vga_write(buf);
-        vga_writeln("] Hello from test_task");
-
-        for(volatile uint32_t i=0; i<1000000; i++);
+static void sleep_ticks(uint32_t count){
+    for(uint32_t i=0;i<count;i++){
         task_yield();
     }
 }
 
+static void test_task(){
+    uint32_t counter = 0;
+    while(1){
+        int id = task_current_id();
+        char idbuf[16], cntbuf[16];
+        utoa32((uint32_t)id, idbuf);
+        utoa32(counter++, cntbuf);
+
+        vga_write("[task ");
+        vga_write(idbuf);
+        vga_write("] tick ");
+        vga_writeln(cntbuf);
+
+        for(volatile uint32_t i = 0; i < 20000000u; i++){
+            if((i & 0x3FFFu) == 0u){
+                scheduler_maybe_yield();
+            }
+        }
+
+        /* one last check before next iteration */
+        scheduler_maybe_yield();
+    }
+}
+
+
 
 static void run_cmd(const char* buf, uint32_t mbi_addr){
     if(my_streq(buf,"help"))
-        vga_writeln("commands: help, echo <text>, clear, halt, uptime, cpuid, reboot, mem, memmap, alloc <n>, heap, kmstat, taskrun, tasks, switch, time, history, !!, poweroff");
+        vga_writeln("commands: help, echo <text>, clear, halt, uptime, cpuid, reboot, mem, memmap, alloc <n>, heap, kmstat, taskrun, tasks, tstat, switch, time, history, !!, poweroff");
 
     else if(my_starts(buf,"echo "))
         vga_writeln(buf+5);
@@ -273,9 +290,12 @@ static void run_cmd(const char* buf, uint32_t mbi_addr){
 
     else if(my_streq(buf,"tasks"))
         task_list();
-        
+    
+    else if(my_streq(buf,"tstat"))
+        task_stats_print();
+    
     else if(my_streq(buf,"switch"))
-        task_switch_first();
+        task_yield();
         
     else if(my_streq(buf,"time")){
         struct rtc_time t;
@@ -313,43 +333,92 @@ static void run_cmd(const char* buf, uint32_t mbi_addr){
         vga_writeln("unknown");
 }
 
+/* store Multiboot info globally so shell_task can access it */
+static uint32_t g_mbi_addr = 0;
 
-void kernel_main(uint32_t mbi_addr){
-    /* make sure we start from a clean screen with default color */
-    vga_set_color(0x0F); /* default: black bg, white text */
-    vga_clear();
+/* Shell as a TASK: same logic as previous inline shell loop but no longer in kernel_main */
+static void shell_task(void){
+    char buf[128]; size_t n = 0;
+    vga_writeln("mini-os shell");
+    prompt();
 
-    /* colored banner (prints after clear so it remains visible) */
-    vga_set_color(0x1F); /* blue background, white text */
-    vga_writeln("==============================================");
-    vga_writeln("               ITI Patna OS                   ");
-    vga_writeln("==============================================");
-    vga_set_color(0x0F); /* reset to default */
-
-    irq_init(); __asm__ volatile("sti");
-    /* initialize kernel heap (bump allocator) at 16 MiB */
-    kalloc_init(0x01000000);
-    
-    paging_init();
-    task_init();
-    
-    char buf[128]; size_t n=0; prompt();
     for(;;){
-        char c=kbd_getch();
-        if(c==0)continue;
+        char c = kbd_getch();
+        if(c==0){
+          continue;
+        }
+
         if(c=='\n'){
             buf[n]=0;
             vga_putc('\n');
+
             if(my_strlen(buf) > 0 && !my_streq(buf,"history") && !my_streq(buf,"!!")){
                 history_add(buf);
             }
-            run_cmd(buf, mbi_addr);
-            n=0; prompt();
+
+            /* use global mbi addr */
+            run_cmd(buf, g_mbi_addr);
+            n = 0;
+            prompt();
         }
-        else if(c==8){if(n>0){n--;vga_putc('\b');}}
-        else{if(n<127){buf[n++]=c;vga_putc(c);}}
+        else if(c==8){
+            if(n>0){ n--; vga_putc('\b'); }
+        }
+        else {
+            if(n<127){ buf[n++]=c; vga_putc(c); }
+        }
     }
 }
+
+
+void kernel_main(uint32_t mbi_addr){
+    /* store mbi for shell/task commands */
+    g_mbi_addr = mbi_addr;
+
+    /* start: clear and banner */
+    vga_set_color(0x0F);
+    vga_clear();
+    vga_set_color(0x1F);
+    vga_writeln("==============================================");
+    vga_writeln("               ITI Patna OS                   ");
+    vga_writeln("==============================================");
+    vga_set_color(0x0F);
+    vga_writeln("[dbg] after banner");
+
+    /* IRQs / IDT / PIT */
+    irq_init();
+    vga_writeln("[dbg] after irq_init");
+    __asm__ volatile("sti");
+    vga_writeln("[dbg] after sti");
+
+    /* heap */
+    kalloc_init(0x01000000);
+    vga_writeln("[dbg] after kalloc_init");
+
+    /* paging */
+    paging_init();
+    vga_writeln("[dbg] after paging_init");
+
+    /* task system */
+    task_init();
+    vga_writeln("[dbg] after task_init");
+
+    /* create shell task (first) */
+    vga_writeln("[dbg] about to create shell task");
+    task_create(shell_task);
+    vga_writeln("[dbg] after create shell task");
+
+    /* don't auto-create demo tasks here (create with `taskrun`) */
+
+    /* final: switch into task world */
+    vga_writeln("[dbg] about to switch to first task");
+    task_switch_first();
+
+    /* if we ever return, halt and print message */
+    vga_writeln("[dbg] returned from task_switch_first (unexpected)");
+    for(;;) __asm__ volatile("hlt");
+}
+
 
 static void history_add(const char* cmd){
     size_t len = my_strlen(cmd);

@@ -1,5 +1,7 @@
 #include <stdint.h>
 
+extern void task_on_tick(void);
+
 static inline void outb(uint16_t p, uint8_t v){ __asm__ volatile("outb %0,%1"::"a"(v),"Nd"(p)); }
 static inline uint16_t get_cs(){ uint16_t s; __asm__ volatile("mov %%cs,%0":"=r"(s)); return s; }
 
@@ -11,7 +13,10 @@ static struct idt_ptr idtp;
 
 static volatile uint32_t ticks=0;
 
-void timer_isr(){ ticks++; }
+void timer_isr(){ 
+  ticks++;
+  task_on_tick();
+}
 
 __attribute__((naked)) void irq0_stub(){
     __asm__ volatile(
