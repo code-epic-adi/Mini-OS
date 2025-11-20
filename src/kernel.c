@@ -41,6 +41,8 @@ static void hex16_64(uint64_t x,char*b){ static const char h[16]="0123456789ABCD
 
 static void prompt(){vga_write("> ");}
 
+static volatile int g_tasks_quiet = 0;
+
 /* Multiboot2 constants and structs */
 #define MULTIBOOT_TAG_TYPE_END 0
 #define MULTIBOOT_TAG_TYPE_MMAP 6
@@ -197,32 +199,36 @@ static void sleep_ticks(uint32_t count){
 static void test_task(){
     uint32_t counter = 0;
     while(1){
-        int id = task_current_id();
-        char idbuf[16], cntbuf[16];
-        utoa32((uint32_t)id, idbuf);
-        utoa32(counter++, cntbuf);
+        /* Only print if not muted, and not too often */
+        if(!g_tasks_quiet){
+            /* print once every 16 iterations to reduce spam */
+            if((counter & 0x1E) == 0){
+                int id = task_current_id();
+                char idbuf[16], cntbuf[16];
+                utoa32((uint32_t)id, idbuf);
+                utoa32(counter, cntbuf);
 
-        vga_write("[task ");
-        vga_write(idbuf);
-        vga_write("] tick ");
-        vga_writeln(cntbuf);
-
-        for(volatile uint32_t i = 0; i < 20000000u; i++){
-            if((i & 0x3FFFu) == 0u){
-                scheduler_maybe_yield();
+                vga_write("[task ");
+                vga_write(idbuf);
+                vga_write("] tick ");
+                vga_writeln(cntbuf);
             }
         }
 
-        /* one last check before next iteration */
-        scheduler_maybe_yield();
+        /* Do some work, but allow scheduler to preempt us */
+        for(volatile uint32_t i = 0; i < 5000000u; i++){
+            /* if you have scheduler_maybe_yield, call it here */
+            scheduler_maybe_yield();
+        }
+
+        counter++;
     }
 }
 
 
-
 static void run_cmd(const char* buf, uint32_t mbi_addr){
     if(my_streq(buf,"help"))
-        vga_writeln("commands: help, echo <text>, clear, halt, uptime, cpuid, reboot, mem, memmap, alloc <n>, heap, kmstat, taskrun, tasks, tstat, switch, time, history, !!, poweroff");
+        vga_writeln("commands: help, echo <text>, clear, halt, uptime, cpuid, reboot, mem, memmap, alloc <n>, heap, kmstat, taskrun, tasks, tstat, tquiet, tverbose, switch, time, history, !!, poweroff");
 
     else if(my_starts(buf,"echo "))
         vga_writeln(buf+5);
@@ -293,6 +299,16 @@ static void run_cmd(const char* buf, uint32_t mbi_addr){
     
     else if(my_streq(buf,"tstat"))
         task_stats_print();
+    
+    else if(my_streq(buf,"tquiet")){
+        g_tasks_quiet = 1;
+        vga_writeln("task output muted");
+    }
+
+    else if(my_streq(buf,"tverbose")){
+        g_tasks_quiet = 0;
+        vga_writeln("task output enabled");
+    }
     
     else if(my_streq(buf,"switch"))
         task_yield();

@@ -6,6 +6,8 @@ uint8_t inb(uint16_t p){
     return r;
 }
 
+extern void scheduler_maybe_yield(void);
+
 static int ready(){
     return inb(0x64) & 1;
 }
@@ -14,7 +16,9 @@ char kbd_getch(){
     static int shift = 0;
 
     /* BLOCKING wait: we know this worked reliably before */
-    while(!ready()) {}
+    while(!ready()) {
+      scheduler_maybe_yield();
+    }
 
     uint8_t s = inb(0x60);
 
